@@ -28,12 +28,15 @@ def _default(obj: Any) -> Any:
         return obj.total_seconds()
     if isinstance(obj, decimal.Decimal):
         return str(obj)
-    if isinstance(obj, bytes):
+    if isinstance(obj, (bytes, bytearray)):
         return obj.decode("utf-8", errors="replace")
     if isinstance(obj, enum.Enum):
         return obj.value
     if isinstance(obj, (set, frozenset)):
-        return sorted(obj)
+        try:
+            return sorted(obj)
+        except TypeError:
+            return sorted(obj, key=str)
     if is_dataclass(obj) and not isinstance(obj, type):
         return asdict(obj)
     raise TypeError(f"Object of type {type(obj).__name__} is not serializable")
@@ -64,14 +67,19 @@ def to_jsonl(
     Edge cases:
       * Empty iterable -> no output (empty string / nothing written).
       * Non-iterable input -> ``TypeError``.
+      * ``str``/``bytes``/``bytearray``/``dict``/stream-like input -> ``TypeError``
+        (likely caller mistakes, not records).
+      * ``batch_size <= 0`` -> ``ValueError``.
       * Non-JSON-native values are normalized by :func:`_default`.
 
     When ``file`` is given, lines are written in batches of ``batch_size`` so
     large generators are streamed with bounded memory; an empty string is
     returned. Otherwise the joined output is returned as a string.
     """
-    if isinstance(records, (str, bytes)) or hasattr(records, "read"):
-        raise TypeError("to_jsonl expects an iterable of records, not a stream/str")
+    if isinstance(records, (str, bytes, bytearray, dict)) or hasattr(records, "read"):
+        raise TypeError("to_jsonl expects an iterable of records, not a stream/str/dict")
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive")
     it = iter(records)
 
     if file is not None:
@@ -112,9 +120,11 @@ class Exporter:
                 self._flush()
 
     def close(self) -> None:
-        self._flush()
-        if self._owns_handle:
-            self._handle.close()
+        try:
+            self._flush()
+        finally:
+            if self._owns_handle:
+                self._handle.close()
 
     def _flush(self) -> None:
         if not self._batch:

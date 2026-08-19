@@ -11,14 +11,25 @@ import datetime
 import decimal
 import enum
 import json
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any, TextIO
 
-DEFAULT_BATCH_SIZE = 1024
+DEFAULT_BATCH_SIZE: int = 1024
 
 __all__ = ["DEFAULT_BATCH_SIZE", "Exporter", "to_json", "to_jsonl"]
+
+
+def _validate_records(records: Iterable[Any]) -> None:
+    if isinstance(records, (str, bytes, bytearray)) or isinstance(records, Mapping):
+        raise TypeError("expected an iterable of records, not str/bytes/bytearray/mapping")
+    if hasattr(records, "read"):
+        raise TypeError("expected an iterable of records, not a stream")
+
+
+def _write_batch(handle: TextIO, batch: list[str]) -> None:
+    handle.write("\n".join(batch) + "\n")
 
 
 def _default(obj: Any) -> Any:
@@ -67,7 +78,7 @@ def to_jsonl(
     Edge cases:
       * Empty iterable -> no output (empty string / nothing written).
       * Non-iterable input -> ``TypeError``.
-      * ``str``/``bytes``/``bytearray``/``dict``/stream-like input -> ``TypeError``
+      * ``str``/``bytes``/``bytearray``/mapping/stream-like input -> ``TypeError``
         (likely caller mistakes, not records).
       * ``batch_size <= 0`` -> ``ValueError``.
       * Non-JSON-native values are normalized by :func:`_default`.
@@ -76,8 +87,7 @@ def to_jsonl(
     large generators are streamed with bounded memory; an empty string is
     returned. Otherwise the joined output is returned as a string.
     """
-    if isinstance(records, (str, bytes, bytearray, dict)) or hasattr(records, "read"):
-        raise TypeError("to_jsonl expects an iterable of records, not a stream/str/dict")
+    _validate_records(records)
     if batch_size <= 0:
         raise ValueError("batch_size must be positive")
     it = iter(records)
@@ -87,10 +97,10 @@ def to_jsonl(
         for line in _iter_lines(it):
             batch.append(line)
             if len(batch) >= batch_size:
-                file.write("\n".join(batch) + "\n")
+                _write_batch(file, batch)
                 batch.clear()
         if batch:
-            file.write("\n".join(batch) + "\n")
+            _write_batch(file, batch)
         return ""
 
     return "\n".join(_iter_lines(it))
@@ -114,6 +124,7 @@ class Exporter:
         self._batch: list[str] = []
 
     def write_all(self, records: Iterable[Any]) -> None:
+        _validate_records(records)
         for line in _iter_lines(records):
             self._batch.append(line)
             if len(self._batch) >= self._batch_size:
@@ -129,11 +140,11 @@ class Exporter:
     def _flush(self) -> None:
         if not self._batch:
             return
-        self._handle.write("\n".join(self._batch) + "\n")
+        _write_batch(self._handle, self._batch)
         self._batch.clear()
 
     def __enter__(self) -> Exporter:
         return self
 
-    def __exit__(self, *exc: object) -> None:
+    def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
         self.close()

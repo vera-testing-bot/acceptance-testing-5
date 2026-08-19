@@ -5,14 +5,13 @@ import decimal
 import enum
 import io
 import json
-import sys
 import unittest.mock
+from collections import ChainMap
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from shard_app.exporter import (
     Exporter,
@@ -93,7 +92,7 @@ def test_to_jsonl_streams_to_a_file_object() -> None:
 
 
 def test_to_jsonl_accepts_a_generator_without_materializing() -> None:
-    def gen():
+    def gen() -> Iterator[dict[str, int]]:
         for i in range(3):
             yield {"i": i}
 
@@ -132,7 +131,7 @@ def test_to_jsonl_rejects_non_positive_batch_size() -> None:
         to_jsonl([], batch_size=-1)
 
 
-def test_exporter_class_streams_in_batches(tmp_path) -> None:
+def test_exporter_class_streams_in_batches(tmp_path: Path) -> None:
     path = tmp_path / "out.jsonl"
     exporter = Exporter(path, batch_size=2)
     exporter.write_all({"id": i} for i in range(5))
@@ -142,14 +141,14 @@ def test_exporter_class_streams_in_batches(tmp_path) -> None:
     assert lines == ['{"id":0}', '{"id":1}', '{"id":2}', '{"id":3}', '{"id":4}']
 
 
-def test_exporter_rejects_non_positive_batch_size(tmp_path) -> None:
+def test_exporter_rejects_non_positive_batch_size(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         Exporter(tmp_path / "out.jsonl", batch_size=0)
     with pytest.raises(ValueError):
         Exporter(tmp_path / "out.jsonl", batch_size=-1)
 
 
-def test_exporter_works_as_a_context_manager(tmp_path) -> None:
+def test_exporter_works_as_a_context_manager(tmp_path: Path) -> None:
     path = tmp_path / "out.jsonl"
     with Exporter(path, batch_size=2) as exporter:
         exporter.write_all({"id": i} for i in range(3))
@@ -173,7 +172,7 @@ def test_exporter_does_not_close_a_passed_in_handle() -> None:
     assert not sink.closed
 
 
-def test_exporter_closes_owned_handle_even_when_flush_raises(tmp_path) -> None:
+def test_exporter_closes_owned_handle_even_when_flush_raises(tmp_path: Path) -> None:
     class FailingHandle:
         def __init__(self) -> None:
             self.closed = False
@@ -207,3 +206,52 @@ def test_bytearray_is_decoded_like_bytes() -> None:
 def test_exporter_round_trips_nested_structures() -> None:
     record = {"tags": ["a", "b"], "meta": {"owner": None, "active": True}}
     assert to_json(record) == '{"tags":["a","b"],"meta":{"owner":null,"active":true}}'
+
+
+def test_to_jsonl_multi_batch_to_file() -> None:
+    sink = io.StringIO()
+    to_jsonl([{"i": i} for i in range(5)], file=sink, batch_size=2)
+    assert sink.getvalue().splitlines() == [
+        '{"i":0}',
+        '{"i":1}',
+        '{"i":2}',
+        '{"i":3}',
+        '{"i":4}',
+    ]
+
+
+def test_to_jsonl_empty_to_file_returns_empty_string() -> None:
+    sink = io.StringIO()
+    result = to_jsonl([], file=sink)
+    assert result == ""
+    assert sink.getvalue() == ""
+
+
+def test_to_jsonl_rejects_mapping_subclasses() -> None:
+    with pytest.raises(TypeError):
+        to_jsonl(ChainMap({"a": 1}))  # type: ignore[arg-type]
+
+
+def test_exporter_write_all_with_empty_iterable(tmp_path: Path) -> None:
+    path = tmp_path / "out.jsonl"
+    with Exporter(path) as exporter:
+        exporter.write_all([])
+    assert path.read_text() == ""
+
+
+def test_exporter_write_all_rejects_str_bytes_and_mapping(tmp_path: Path) -> None:
+    with pytest.raises(TypeError):
+        Exporter(tmp_path / "out.jsonl").write_all("not records")  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        Exporter(tmp_path / "out.jsonl").write_all(b"not records")  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        Exporter(tmp_path / "out.jsonl").write_all({"a": 1})  # type: ignore[arg-type]
+
+
+def test_exporter_appends_to_existing_file(tmp_path: Path) -> None:
+    path = tmp_path / "out.jsonl"
+    path.write_text('{"existing":true}\n')
+    with Exporter(path, batch_size=2) as exporter:
+        exporter.write_all({"id": i} for i in range(3))
+    lines = path.read_text().splitlines()
+    assert lines == ['{"existing":true}', '{"id":0}', '{"id":1}', '{"id":2}']

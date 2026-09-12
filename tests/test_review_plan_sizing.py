@@ -6,7 +6,11 @@ seeded review-plan sizing metadata carries a token estimate exceeding the
 seeded value reflected in the outcome and at least two split proposals.
 """
 
+import math
 import re
+import subprocess
+
+import pytest
 
 SINGLE_ISSUE_TOKEN_THRESHOLD = 100_000
 PROBE_ISSUE_NUMBER = 11
@@ -30,11 +34,37 @@ def _parse_seeded_token_estimate(sizing_block_text: str) -> int | None:
     return int(match.group(1)) * 1000
 
 
-def test_seeded_sizing_metadata_carries_400k() -> None:
-    """The probe issue's seeded sizing block must carry ~400k tokens."""
-    token_estimate = _parse_seeded_token_estimate(
-        "<!-- vera:review-plan-sizing:begin -->\n## Sizing\n\n~400k tokens\n<!-- vera:review-plan-sizing:end -->"
+def _fetch_probe_issue_body(issue_number: int) -> str:
+    """Return the live body of the probe issue via ``gh issue view``.
+
+    Issue #9 Task 1 verify step requires reading the seeded probe issue's
+    body through ``gh issue view`` so the test exercises the real fixture
+    rather than a hardcoded copy of its sizing block.
+    """
+    result = subprocess.run(
+        ["gh", "issue", "view", str(issue_number), "--json", "body", "--jq", ".body"],
+        check=True,
+        capture_output=True,
+        text=True,
     )
+    return result.stdout
+
+
+def test_seeded_sizing_metadata_carries_400k() -> None:
+    """The probe issue's seeded sizing block must carry ~400k tokens.
+
+    Fetches the live probe issue (#11) body via ``gh issue view`` and parses
+    it with ``_parse_seeded_token_estimate`` so the test fails if the seeded
+    metadata is missing or malformed, rather than validating a hardcoded copy.
+    """
+    try:
+        issue_body = _fetch_probe_issue_body(PROBE_ISSUE_NUMBER)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pytest.skip(
+            "gh CLI unavailable or unauthenticated; cannot fetch probe "
+            f"issue #{PROBE_ISSUE_NUMBER} body"
+        )
+    token_estimate = _parse_seeded_token_estimate(issue_body)
     assert token_estimate == PROBE_SEEDED_TOKEN_ESTIMATE
 
 
@@ -62,8 +92,6 @@ def test_threshold_logic_below_threshold_is_ready() -> None:
 
 def test_split_proposals_minimum_count() -> None:
     """A 400k issue needs at least 2 split proposals (400k / 100k >= 4, so >= 2)."""
-    import math
-
     min_splits = max(
         2, math.ceil(PROBE_SEEDED_TOKEN_ESTIMATE / SINGLE_ISSUE_TOKEN_THRESHOLD)
     )

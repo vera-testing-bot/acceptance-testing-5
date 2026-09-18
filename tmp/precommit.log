@@ -1,0 +1,7 @@
+.                                                                        [100%]
+1 passed in 0.01s
+pytest exit=0
+All checks passed!
+ruff-check exit=0
+2 files already formatted
+ruff-format exit=0

@@ -4,3 +4,4 @@
 # that is only true while Vera is not opted in to adopting unlabeled issues.
 # See vera#5372.
 auto_manage_issues: false
+escalation_timeout_hours: 100

@@ -1,4 +1,4 @@
-# vera-template-version: 2026.10.08.2
+# vera-template-version: 2026.10.09.1
 # DO NOT EDIT — managed by WorkflowManager. Manual edits will be overwritten.
 #
 # AGENT-NOTE: This file is a PURE BOOTLOADER. It must not contain any
@@ -881,3 +881,25 @@ jobs:
           fi
           BODY="${BODY}"$'\n\n'"${FOOTER}"
           gh issue comment "$ORIGINATING_REF" --repo "$GITHUB_REPOSITORY" --body "$BODY"
+
+      # #7482 part 2: the Run step always exits 0 (it captures the agent's
+      # real exit code to a sentinel so the callback/rescue/finalizer chain
+      # above still runs), which left a timed-out or crashed agent run green
+      # in Actions even though the callback reported status=failed. This step
+      # is deliberately last and has NO continue-on-error so a nonzero agent
+      # exit flips the overall job red.
+      - name: Surface agent failure
+        if: always()
+        env:
+          VERA_GRACEFUL_EXIT: ${{ steps.fetch.outputs.graceful_exit }}
+        run: |
+          if [ "$VERA_GRACEFUL_EXIT" = "true" ]; then
+            exit 0
+          fi
+          [ -f /tmp/vera_agent_exit_code ] || exit 0
+          CODE=$(tr -d '[:space:]' < /tmp/vera_agent_exit_code)
+          if [ -n "$CODE" ] && [ "$CODE" != "0" ]; then
+            echo "::error::Agent exited with code ${CODE} — failing the job."
+            exit 1
+          fi
+          exit 0
